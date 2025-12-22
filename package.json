@@ -1,0 +1,59 @@
+{
+  "name": "context-generator",
+  "displayName": "context-generator",
+  "description": "Right click folders to get AI context",
+  "version": "0.0.1",
+  "publisher": "Mdeveloper",
+  "engines": {
+    "vscode": "^1.107.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+ "contributes": {
+    "commands": [
+      {
+        "command": "repoContext.generate",
+        "title": "Generate AI Context"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "repoContext.generate",
+          "when": "explorerResourceIsFolder",
+          "group": "modification"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/vscode": "^1.107.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^9.39.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.48.1"
+  },
+  "dependencies": {
+    "clipboardy": "^5.0.2",
+    "fs-extra": "^11.3.3",
+    "glob": "^13.0.0",
+    "gpt-3-encoder": "^1.1.4",
+    "ignore": "^7.0.5"
+  }
+}
