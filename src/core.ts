@@ -1,105 +1,144 @@
 // src/core.ts
-import * as fs from 'fs-extra';
+import * as vscode from 'vscode';
+import * as fs from 'fs';
 import * as path from 'path';
-import * as glob from 'glob';
-import ignore from 'ignore';
-import { encode } from 'gpt-3-encoder';
+import fg from 'fast-glob';
 
-export interface ContextOutput {
-    project_name: string;
-    root: string;
-    structure: any;
-    files: Record<string, string>;
-    token_count: number;
+// 1. Define the interface so we know what to expect
+export interface ContextResult {
+    output: string;
+    tokens: number;
 }
 
-// Helper to count tokens
-function countTokens(text: string): number {
-    return encode(text).length;
-}
-
-// 1. Build Directory Tree
-export async function buildTree(dir: string, ig: any, rootPath: string): Promise<any> {
-    const name = path.basename(dir);
-    const stats = await fs.stat(dir);
-    
-    // Check ignore rules relative to root
-    const relativePath = path.relative(rootPath, dir);
-    if (relativePath && ig.ignores(relativePath)) return null;
-
-    if (!stats.isDirectory()) {
-        return { type: 'file', name };
-    }
-
-    const children: any[] = [];
-    const entries = await fs.readdir(dir);
-
-    for (const entry of entries) {
-        const fullPath = path.join(dir, entry);
-        const childNode = await buildTree(fullPath, ig, rootPath);
-        if (childNode) children.push(childNode);
-    }
-
-    // Sort: directories first, then files
-    children.sort((a, b) => {
-        if (a.type === b.type) return a.name.localeCompare(b.name);
-        return a.type === 'dir' ? -1 : 1;
+export async function scanDirectory(rootPath: string) {
+    // Using fast-glob to scan efficiently
+    const entries = await fg(['**/*'], {
+        cwd: rootPath,
+        ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/.vscode/**'],
+        onlyFiles: true,
+        markDirectories: false,
+        dot: true
     });
 
-    return { type: 'dir', name, children };
-}
+    const folders = new Set<string>();
+    const extensions = new Set<string>();
 
-// 2. Main Generation Function
-export async function generateContext(folderPath: string): Promise<ContextOutput> {
-    const rootName = path.basename(folderPath);
-    
-    // Setup Ignore (Standard .gitignore + common junk)
-    const ig = ignore().add(['.git', 'node_modules', 'dist', 'out', '.vscode', '*.log', '.DS_Store']);
-    const gitIgnorePath = path.join(folderPath, '.gitignore');
-    if (await fs.pathExists(gitIgnorePath)) {
-        ig.add((await fs.readFile(gitIgnorePath)).toString());
-    }
+    entries.forEach((entry: string) => {
+        const dir = path.dirname(entry);
+        const ext = path.extname(entry);
 
-    // Generate Structure
-    const structure = await buildTree(folderPath, ig, folderPath);
-
-    // Read Files (Simple logic: read small text files)
-    const filesData: Record<string, string> = {};
-    const allFiles = glob.sync('**/*', { 
-        cwd: folderPath, 
-        nodir: true, 
-        dot: true,
-        ignore: ['**/.git/**', '**/node_modules/**', '**/*.png', '**/*.jpg', '**/*.exe', '**/package-lock.json'] 
+        if (dir !== '.') {
+            // Get the top-level folder name
+            folders.add(dir.split(path.sep)[0]);
+        }
+        if (ext) {
+            extensions.add(ext);
+        }
     });
 
-    for (const f of allFiles) {
-        if (ig.ignores(f)) continue;
-        
-        try {
-            const fullPath = path.join(folderPath, f);
-            const content = await fs.readFile(fullPath, 'utf-8');
-            // Only include reasonable size text files
-            if (content.length < 50000) { 
-                filesData[f] = content;
+    return {
+        folders: Array.from(folders).sort(),
+        extensions: Array.from(extensions).sort()
+    };
+}
+
+export async function generateContext(rootPath: string, config: any): Promise<ContextResult> {
+    let output = '';
+    
+    // --- 1. Generate Tree ---
+    output += '# Project Tree\n```\n';
+
+const printTree = (dir: string, prefix: string = '') => {
+const items = fs.readdirSync(dir, { withFileTypes: true });
+
+const filteredItems = items.filter(item => {
+if (item.name.startsWith('.') || item.name === 'node_modules') return false;
+return true;
+});
+
+filteredItems.forEach((item, index) => {
+const isLast = index === filteredItems.length - 1;
+const pointer = isLast ? '└── ' : '├── ';
+
+let shouldInclude = true;
+
+// Check config against UI selections
+if (item.isDirectory()) {
+const folderConfig = config.folders[item.name];
+if (folderConfig && !folderConfig.tree) shouldInclude = false;
+} else {
+const ext = path.extname(item.name);
+const extConfig = config.extensions[ext];
+if (extConfig && !extConfig.tree) shouldInclude = false;
+}
+
+if (shouldInclude) {
+output += `${prefix}${pointer}${item.name}\n`;
+if (item.isDirectory()) {
+printTree(path.join(dir, item.name), prefix + (isLast ? '    ' : '│   '));
+}
+}
+});
+};
+
+try {
+printTree(rootPath);
+} catch (e) {
+output += `Error generating tree: ${e}\n`;
+}
+output += '```\n\n';
+
+    // --- 2. Generate Content ---
+    output += '# File Contents\n\n';
+
+    const entries = await fg(['**/*'], {
+        cwd: rootPath,
+        ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/.vscode/**'],
+        onlyFiles: true,
+        absolute: true
+    });
+
+    for (const filePath of entries) {
+        const relativePath = path.relative(rootPath, filePath);
+        const ext = path.extname(filePath);
+        const parts = relativePath.split(path.sep);
+        const topFolder = parts.length > 1 ? parts[0] : null;
+
+        // Determine if file should be included based on extension
+        let includeFile = true;
+        const extConfig = config.extensions[ext];
+        if (extConfig && !extConfig.content) {
+            includeFile = false;
+        }
+
+        // Determine if file should be included based on parent folder
+        if (topFolder) {
+            const folderConfig = config.folders[topFolder];
+            if (folderConfig && !folderConfig.content) {
+                includeFile = false;
             }
-        } catch (e) {
-            // Skip binary or unreadable files
+        }
+
+        if (includeFile) {
+            try {
+                const content = fs.readFileSync(filePath, 'utf-8');
+                // Simple binary check (skip if null characters found)
+                if (content.indexOf('\0') === -1) {
+                    output += `## File: ${relativePath}\n\`\`\`${ext.replace('.', '')}\n${content}\n\`\`\`\n\n`;
+                }
+            } catch (err) {
+                // Skip unreadable files
+            }
         }
     }
 
-    const fullJson = {
-        project_name: rootName,
-        root: path.basename(folderPath),
-        structure: structure,
-        files: filesData
-    };
-    
-    // Calculate total tokens
-    const jsonString = JSON.stringify(fullJson);
-    const totalTokens = countTokens(jsonString);
+    // --- 3. Token Count ---
+    // Using your preferred approximation (chars / 4)
+    const tokenCount = Math.ceil(output.length / 4);
 
+    // CRITICAL FIX: Return an OBJECT, not just the string
     return {
-        ...fullJson,
-        token_count: totalTokens
+        output: output,
+        tokens: tokenCount
     };
 }
