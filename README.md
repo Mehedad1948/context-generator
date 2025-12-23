@@ -2,6 +2,7 @@
 
 A VS Code extension to generate context files for AI coding assistants (like ChatGPT or Claude).
 
+
 ## Features
 
 - Right-click any folder in your Explorer.
@@ -9,6 +10,8 @@ A VS Code extension to generate context files for AI coding assistants (like Cha
 - It creates a comprehensive text file containing the folder structure and file contents.
 - Automatically respects `.gitignore` rules.
 - Adds token count estimates.
+
+![Demo](images/demo.png)
 
 ## Usage
 
