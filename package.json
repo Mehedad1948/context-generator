@@ -2,7 +2,7 @@
   "name": "cntxtify",
   "displayName": "Contextify",
   "description": "Right click folders to get AI context",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "icon": "logo.png",
   "publisher": "Mdeveloper",
   "engines": {
