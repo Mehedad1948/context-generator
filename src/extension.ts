@@ -4,7 +4,6 @@ import { scanDirectory, generateContext } from './core';
 
 export function activate(context: vscode.ExtensionContext) {
     let disposable = vscode.commands.registerCommand('cntxtify.generateContext', async (uri: vscode.Uri) => {
-        // If triggered via command palette without context, fallback to first workspace folder
         if (!uri && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
             uri = vscode.workspace.workspaceFolders[0].uri;
         }
@@ -70,6 +69,8 @@ function getWebviewContent(treeData: any, folderPath: string) {
               color: var(--vscode-foreground); 
               background-color: var(--vscode-editor-background); 
               padding: 20px; 
+              max-width: 900px;
+              margin: 0 auto;
           }
 
           h3 { margin-top: 0; opacity: 0.9; }
@@ -114,20 +115,16 @@ function getWebviewContent(treeData: any, folderPath: string) {
 
           /* 3. Extension Filter Grid */
           #ext-grid { 
-            display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); 
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); 
             gap: 8px; padding: 10px; 
           }
           .ext-card {
-            background: rgba(127,127,127,0.1); border-radius: 4px; padding: 5px 8px;
-            display: flex; justify-content: space-between; align-items: center; font-size: 0.85em;
+            background: rgba(127,127,127,0.1); border-radius: 4px; padding: 6px 10px;
+            display: flex; justify-content: space-between; align-items: center; font-size: 0.9em;
           }
           .ext-name { font-weight: bold; }
-          .ext-btns { display: flex; gap: 4px; }
-          .mini-btn { 
-            cursor: pointer; padding: 1px 5px; border-radius: 3px; background: rgba(255,255,255,0.1);
-            font-size: 10px; user-select: none;
-          }
-          .mini-btn:hover { background: rgba(255,255,255,0.3); }
+          .ext-btns { display: flex; gap: 8px; }
+          .ext-cb-wrapper { display: flex; align-items: center; gap: 3px; font-size: 11px; cursor: pointer; user-select: none; }
 
           /* 4. Controls & Footer */
           .main-btn {
@@ -138,7 +135,7 @@ function getWebviewContent(treeData: any, folderPath: string) {
           .main-btn:hover { background: var(--btn-hover); }
 
           /* Copy Button & Colors */
-          #copy-container { margin-top: 10px; display: none; gap: 10px; }
+          #copy-container { margin-top: 15px; display: none; gap: 10px; }
           #copyBtn { 
             flex: 1; padding: 10px; border: none; cursor: pointer; color: white; font-weight: bold; border-radius: 2px; 
           }
@@ -146,7 +143,18 @@ function getWebviewContent(treeData: any, folderPath: string) {
           .tok-yellow { background-color: #d29922; }
           .tok-red { background-color: #cf222e; }
 
-          #output { width: 100%; height: 150px; margin-top: 15px; display:none; }
+          /* Result Area */
+          #result-container { margin-top: 15px; display: none; }
+          #output { 
+              width: 100%; height: 300px; 
+              background: var(--vscode-input-background); 
+              color: var(--vscode-input-foreground); 
+              border: 1px solid var(--border);
+              font-family: 'Courier New', monospace;
+              padding: 10px;
+              box-sizing: border-box;
+          }
+          .result-label { font-size: 0.9em; margin-bottom: 5px; opacity: 0.8; font-weight: bold; }
       </style>
   </head>
   <body>
@@ -157,9 +165,7 @@ function getWebviewContent(treeData: any, folderPath: string) {
         <div class="section-header">1. User Instructions</div>
         <div id="prompt-area">
             <textarea id="promptInput" placeholder="E.g., 'Focus on the authentication logic and explain how the login flow works.'"></textarea>
-            <div class="prompt-options">
-                <label style="cursor:pointer;"><input type="checkbox" id="readmeCheck"> Include root README.md</label>
-            </div>
+           
         </div>
       </div>
 
@@ -176,7 +182,7 @@ function getWebviewContent(treeData: any, folderPath: string) {
       <div class="section">
           <div class="section-header">
             <span>3. Filter by Extension</span>
-            <span style="font-size:10px; opacity:0.7">Bulk select/deselect</span>
+            <span style="font-size:10px; opacity:0.7">Select/Deselect All</span>
           </div>
           <div id="ext-grid">
              <!-- Populated by JS -->
@@ -189,7 +195,10 @@ function getWebviewContent(treeData: any, folderPath: string) {
           <button id="copyBtn">Copy to Clipboard (<span id="token-display">0</span> tokens)</button>
       </div>
 
-      <textarea id="output" readonly></textarea>
+      <div id="result-container">
+          <div class="result-label">Generated Context:</div>
+          <textarea id="output" readonly></textarea>
+      </div>
 
       <script>
           const vscode = acquireVsCodeApi();
@@ -240,9 +249,7 @@ function getWebviewContent(treeData: any, folderPath: string) {
                   \`;
 
                   if (isFolder) {
-                      // Subfolders closed by default (remove 'open' unless root)
-                      // Logic: If it's the very top level call, keep open, else closed.
-                      // Actually user requested "subfolders closed by default". 
+                      // Subfolders closed by default (only root stays open if you want, but user said closed by default)
                       const isOpen = isRoot ? 'open' : ''; 
                       
                       li.innerHTML = \`
@@ -251,7 +258,6 @@ function getWebviewContent(treeData: any, folderPath: string) {
                               <div class="children-container" id="children-\${pathId}"></div>
                           </details>
                       \`;
-                      // Async render children
                       setTimeout(() => {
                           const childContainer = document.getElementById('children-' + pathId);
                           if(node.children) childContainer.appendChild(renderTree(node.children, false));
@@ -265,7 +271,7 @@ function getWebviewContent(treeData: any, folderPath: string) {
           }
 
           // Initial Render
-          container.appendChild(renderTree(treeData, true)); // true = keep root folders open? Or just use "open" logic above.
+          container.appendChild(renderTree(treeData, true));
 
           // --- 2. RENDER EXTENSION FILTERS ---
           setTimeout(() => {
@@ -278,11 +284,16 @@ function getWebviewContent(treeData: any, folderPath: string) {
                   sortedExts.forEach(ext => {
                       const div = document.createElement('div');
                       div.className = 'ext-card';
+                      // Note: We start CHECKED because the tree starts CHECKED
                       div.innerHTML = \`
                           <span class="ext-name">\${ext}</span>
                           <div class="ext-btns">
-                              <span class="mini-btn" onclick="bulkToggle('\${ext}', 'tree')" title="Toggle Tree">T</span>
-                              <span class="mini-btn" onclick="bulkToggle('\${ext}', 'content')" title="Toggle Content">C</span>
+                              <label class="ext-cb-wrapper">
+                                <input type="checkbox" class="ext-cb-tree" data-ext="\${ext}" checked onchange="bulkToggle('\${ext}', 'tree', this.checked)"> T
+                              </label>
+                              <label class="ext-cb-wrapper">
+                                <input type="checkbox" class="ext-cb-content" data-ext="\${ext}" checked onchange="bulkToggle('\${ext}', 'content', this.checked)"> C
+                              </label>
                           </div>
                       \`;
                       grid.appendChild(div);
@@ -294,17 +305,12 @@ function getWebviewContent(treeData: any, folderPath: string) {
           // --- 3. TOGGLE LOGIC ---
 
           // Bulk Toggle by Extension
-          const extState = {}; 
-          window.bulkToggle = (ext, type) => {
-              const key = ext + type;
-              const newState = !extState[key];
-              extState[key] = newState;
-
+          window.bulkToggle = (ext, type, isChecked) => {
               // Find all inputs with this extension data attribute
               const inputs = document.querySelectorAll(\`input[data-ext="\${ext}"].cb-\${type}\`);
               inputs.forEach(inp => {
-                  inp.checked = newState;
-                  toggle(inp.dataset.path, type, newState); // Trigger logic cascade
+                  inp.checked = isChecked;
+                  toggle(inp.dataset.path, type, isChecked); // Trigger logic cascade
               });
           };
 
@@ -314,11 +320,7 @@ function getWebviewContent(treeData: any, folderPath: string) {
               if (kind === 'tree' && !isChecked) updateCheckbox(path, 'content', false);
               if (kind === 'content' && isChecked) updateCheckbox(path, 'tree', true);
 
-              // Cascade down (only if folder path starts with...)
-              // Note: Using startsWith is tricky with generic names, but fast-glob paths are usually unique relative paths.
-              // To avoid massive DOM queries, we restrict to children if possible, but querySelectorAll is easiest.
-              // Optimization: Only cascade if it looks like a folder (we don't pass type here easily, assuming DOM scan).
-              
+              // Cascade down (folders)
               const allInputs = document.querySelectorAll(\`input[data-path^="\${path}/"]\`);
               if(allInputs.length > 0) {
                   allInputs.forEach(input => {
@@ -386,17 +388,20 @@ function getWebviewContent(treeData: any, folderPath: string) {
                   const out = document.getElementById('output');
                   out.value = message.result.output;
                   
-                  // Handle Copy Button & Colors
+                  // Show Copy and Result Containers
                   const copyDiv = document.getElementById('copy-container');
-                  const copyBtn = document.getElementById('copyBtn');
-                  const tokenSpan = document.getElementById('token-display');
+                  const resDiv = document.getElementById('result-container');
                   
                   copyDiv.style.display = 'flex';
+                  resDiv.style.display = 'block'; // Make textarea visible
+                  
+                  // Scroll to result
                   copyDiv.scrollIntoView({ behavior: 'smooth' });
                   
                   const tokens = message.result.tokens;
-                  tokenSpan.innerText = tokens;
+                  document.getElementById('token-display').innerText = tokens;
                   
+                  const copyBtn = document.getElementById('copyBtn');
                   copyBtn.className = ''; // Reset
                   if(tokens < 8000) copyBtn.classList.add('tok-green');
                   else if(tokens < 32000) copyBtn.classList.add('tok-yellow');
@@ -404,7 +409,6 @@ function getWebviewContent(treeData: any, folderPath: string) {
               }
           });
       </script>
-  </bod
+  </body>
   </html>`;
 }
-

@@ -1,168 +1,138 @@
 // src/core.ts
-import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import fg from 'fast-glob';
-import { ContextResult, FileNode, GeneratorConfig } from './types';
 
-// Helper to build tree from paths
-function buildTree(paths: string[], rootPath: string): FileNode[] {
-    const root: FileNode[] = [];
-    
-    paths.forEach(filePath => {
-        const parts = filePath.split('/'); 
-        let currentLevel = root;
-        let currentPath = '';
+export interface TreeItem {
+    name: string;
+    path: string;
+    type: 'file' | 'folder';
+    children?: TreeItem[];
+}
 
-        parts.forEach((part, index) => {
-            currentPath = currentPath ? `${currentPath}/${part}` : part;
-            const isFile = index === parts.length - 1;
-            
-            let existingNode = currentLevel.find(n => n.name === part);
-
-            if (!existingNode) {
-                const newNode: FileNode = {
-                    name: part,
-                    path: currentPath,
-                    type: isFile ? 'file' : 'folder',
-                    children: isFile ? undefined : []
-                };
-                currentLevel.push(newNode);
-                existingNode = newNode;
-            }
-
-            if (!isFile && existingNode.children) {
-                currentLevel = existingNode.children;
-            }
-        });
-    });
-
-    const sortNodes = (nodes: FileNode[]) => {
-        nodes.sort((a, b) => {
-            if (a.type === b.type) return a.name.localeCompare(b.name);
-            return a.type === 'folder' ? -1 : 1;
-        });
-        nodes.forEach(n => {
-            if (n.children) sortNodes(n.children);
-        });
+export interface GeneratorConfig {
+    selections: { 
+        [path: string]: { tree: boolean; content: boolean } 
     };
-    
-    sortNodes(root);
-    return root;
+    userPrompt?: string;
+    includeReadme?: boolean;
 }
 
-export async function scanDirectory(rootPath: string) {
-    const entries = await fg(['**/*'], {
-        cwd: rootPath,
-        ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/.vscode/**', '**/*.lock'],
-        onlyFiles: true,
-        markDirectories: false,
-        dot: true
-    });
+export async function scanDirectory(rootPath: string): Promise<TreeItem[]> {
+    const items: TreeItem[] = [];
+    const ignoreList = ['.git', 'node_modules', 'dist', 'out', 'build', '.DS_Store', '.vscode'];
 
-    return buildTree(entries, rootPath);
-}
-
-export async function generateContext(rootPath: string, config: GeneratorConfig): Promise<ContextResult> {
-    let output = '';
-    const selections = config.selections;
-
-    // --- 1. User Prompt ---
-    if (config.userPrompt && config.userPrompt.trim()) {
-        output += `# User Instructions\n${config.userPrompt}\n\n`;
-    }
-
-    // --- 2. Root README (Optional) ---
-    if (config.includeReadme) {
+    async function walk(dir: string, list: TreeItem[]) {
         try {
-            // Try common readme names
-            const readmeCandidates = ['README.md', 'readme.md', 'Readme.md'];
-            let readmeContent = '';
-            for (const name of readmeCandidates) {
-                const p = path.join(rootPath, name);
-                if (fs.existsSync(p)) {
-                    readmeContent = fs.readFileSync(p, 'utf-8');
-                    break;
+            const files = await fs.promises.readdir(dir, { withFileTypes: true });
+
+            // Sort: Folders first, then files
+            files.sort((a, b) => {
+                if (a.isDirectory() === b.isDirectory()) {
+                    return a.name.localeCompare(b.name);
                 }
-            }
-            if (readmeContent) {
-                output += `# Project README\n\`\`\`markdown\n${readmeContent}\n\`\`\`\n\n`;
-            }
-        } catch (e) { /* ignore if read fails */ }
-    }
-    
-    // --- 3. Project Tree ---
-    output += '# Project Tree\n```\n';
+                return a.isDirectory() ? -1 : 1;
+            });
 
-const printTree = (dir: string, currentRelativePath: string, prefix: string = '') => {
-let items: fs.Dirent[] = [];
-try {
-items = fs.readdirSync(dir, { withFileTypes: true });
-} catch (e) { return; }
+            for (const file of files) {
+                if (ignoreList.includes(file.name)) continue;
 
-const filteredItems = items.filter(item => {
-const relPath = currentRelativePath ? `${currentRelativePath}/${item.name}` : item.name;
-if (item.name.startsWith('.') || item.name === 'node_modules' || item.name === 'dist' || item.name === 'build') return false;
+                const fullPath = path.join(dir, file.name);
+                const isDir = file.isDirectory();
 
-const itemConfig = selections[relPath];
-// If it's not in the selection map (e.g. a new file), default to included? Or excluded?
-// Based on UI defaults, it should be in the map. If missing, assume excluded or included based on logic.
-// Safe bet: if itemConfig exists and tree is false, exclude.
-if (itemConfig && !itemConfig.tree) return false; 
-return true;
-});
+                const item: TreeItem = {
+                    name: file.name,
+                    path: fullPath,
+                    type: isDir ? 'folder' : 'file'
+                };
 
-filteredItems.forEach((item, index) => {
-const isLast = index === filteredItems.length - 1;
-const pointer = isLast ? '└── ' : '├── ';
-const relPath = currentRelativePath ? `${currentRelativePath}/${item.name}` : item.name;
-
-output += `${prefix}${pointer}${item.name}\n`;
-
-if (item.isDirectory()) {
-printTree(path.join(dir, item.name), relPath, prefix + (isLast ? '    ' : '│   '));
-}
-});
-};
-
-try {
-printTree(rootPath, '');
-} catch (e) {
-output += `Error generating tree: ${e}\n`;
-}
-output += '```\n\n';
-
-    // --- 4. File Contents ---
-    output += '# File Contents\n\n';
-
-    const entries = await fg(['**/*'], {
-        cwd: rootPath,
-        ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/.vscode/**'],
-        onlyFiles: true,
-        absolute: false 
-    });
-
-    for (const relativePath of entries) {
-        const normalizedPath = relativePath.split(path.sep).join('/');
-        const fileConfig = selections[normalizedPath];
-
-        if (fileConfig && fileConfig.content) {
-            try {
-                const fullPath = path.join(rootPath, relativePath);
-                const content = fs.readFileSync(fullPath, 'utf-8');
-                const ext = path.extname(relativePath);
-                
-                if (content.indexOf('\0') === -1) {
-                    output += `## File: ${relativePath}\n\`\`\`${ext.replace('.', '')}\n${content}\n\`\`\`\n\n`;
+                if (isDir) {
+                    item.children = [];
+                    await walk(fullPath, item.children);
                 }
-            } catch (err) { }
+
+                list.push(item);
+            }
+        } catch (error) {
+            console.error(`Failed to read directory ${dir}:`, error);
         }
     }
 
-    const tokenCount = Math.ceil(output.length / 4);
+    await walk(rootPath, items);
+    return items;
+}
 
-    return {
-        output: output,
-        tokens: tokenCount
-    };
+export async function generateContext(rootPath: string, config: GeneratorConfig): Promise<{ output: string; tokens: number }> {
+    let output = '';
+
+    // 1. ADD USER PROMPT
+    if (config.userPrompt && config.userPrompt.trim()) {
+        output += `USER INSTRUCTIONS:\n`;
+        output += `${config.userPrompt}\n`;
+        output += `================================================================\n\n`;
+    }
+
+    // 2. ADD README (Special Handling)
+    if (config.includeReadme) {
+        const readmeVariants = ['README.md', 'Readme.md', 'readme.md', 'README.txt'];
+        let readmeFound = false;
+        
+        for (const variant of readmeVariants) {
+            const readmePath = path.join(rootPath, variant);
+            if (fs.existsSync(readmePath)) {
+                try {
+                    const content = fs.readFileSync(readmePath, 'utf-8');
+                    output += `PROJECT README (${variant}):\n\n`;
+                    output += content;
+                    output += `\n\n================================================================\n\n`;
+                    readmeFound = true;
+                    break; // Stop after finding the first match
+                } catch (e) {
+                    console.error("Error reading README:", e);
+                }
+            }
+        }
+    }
+
+    // 3. PROJECT STRUCTURE (Tree)
+    // We filter the keys of selections where tree=true
+    const validPaths = Object.keys(config.selections).filter(p => config.selections[p].tree);
+    
+    if (validPaths.length > 0) {
+        output += `PROJECT STRUCTURE:\n`;
+        validPaths.sort().forEach(filePath => {
+            // Convert to relative path for cleaner output
+            const relativePath = path.relative(rootPath, filePath);
+            output += `- ${relativePath}\n`;
+        });
+        output += `\n================================================================\n\n`;
+    }
+
+    // 4. FILE CONTENTS
+    output += `FILE CONTENTS:\n\n`;
+    const contentPaths = Object.keys(config.selections).filter(p => config.selections[p].content).sort();
+
+    for (const filePath of contentPaths) {
+        // Skip if file no longer exists
+        if (!fs.existsSync(filePath)) continue;
+
+        // Skip folders (sometimes folders get checked for content in UI, but we can't print folder content)
+        const stat = fs.statSync(filePath);
+        if (!stat.isFile()) continue;
+
+        try {
+            const relativePath = path.relative(rootPath, filePath);
+            const fileContent = fs.readFileSync(filePath, 'utf-8');
+
+            output += `--- START FILE: ${relativePath} ---\n`;
+            output += fileContent + '\n';
+            output += `--- END FILE: ${relativePath} ---\n\n`;
+        } catch (error) {
+            output += `Error reading file: ${filePath}\n\n`;
+        }
+    }
+
+    // Rough token estimation (4 characters ~= 1 token)
+    const tokens = Math.ceil(output.length / 4);
+
+    return { output, tokens };
 }
