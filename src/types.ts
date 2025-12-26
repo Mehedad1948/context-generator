@@ -1,16 +1,25 @@
 // src/types.ts
-export interface FilterItem {
-    tree: boolean;    // Include in the folder structure?
-    content: boolean; // Read the file content?
+
+export interface FileNode {
+    name: string;
+    path: string; // relative path
+    type: 'file' | 'folder';
+    children?: FileNode[];
+}
+
+export interface PathConfig {
+    tree: boolean;
+    content: boolean;
 }
 
 export interface GeneratorConfig {
-    folders: Record<string, FilterItem>;    // e.g., "src": { tree: true, content: false }
-    extensions: Record<string, FilterItem>; // e.g., ".ts": { tree: true, content: true }
+    // Key is relative path, Value is settings
+    selections: Record<string, PathConfig>;
+    userPrompt: string;      // NEW: User instructions
+    includeReadme: boolean;  // NEW: Include root README.md
 }
 
-export interface ScanResult {
-    rootName: string;
-    folders: string[];
-    extensions: string[];
+export interface ContextResult {
+    output: string;
+    tokens: number;
 }

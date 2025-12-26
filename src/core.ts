@@ -3,140 +3,164 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import fg from 'fast-glob';
+import { ContextResult, FileNode, GeneratorConfig } from './types';
 
-// 1. Define the interface so we know what to expect
-export interface ContextResult {
-    output: string;
-    tokens: number;
+// Helper to build tree from paths
+function buildTree(paths: string[], rootPath: string): FileNode[] {
+    const root: FileNode[] = [];
+    
+    paths.forEach(filePath => {
+        const parts = filePath.split('/'); 
+        let currentLevel = root;
+        let currentPath = '';
+
+        parts.forEach((part, index) => {
+            currentPath = currentPath ? `${currentPath}/${part}` : part;
+            const isFile = index === parts.length - 1;
+            
+            let existingNode = currentLevel.find(n => n.name === part);
+
+            if (!existingNode) {
+                const newNode: FileNode = {
+                    name: part,
+                    path: currentPath,
+                    type: isFile ? 'file' : 'folder',
+                    children: isFile ? undefined : []
+                };
+                currentLevel.push(newNode);
+                existingNode = newNode;
+            }
+
+            if (!isFile && existingNode.children) {
+                currentLevel = existingNode.children;
+            }
+        });
+    });
+
+    const sortNodes = (nodes: FileNode[]) => {
+        nodes.sort((a, b) => {
+            if (a.type === b.type) return a.name.localeCompare(b.name);
+            return a.type === 'folder' ? -1 : 1;
+        });
+        nodes.forEach(n => {
+            if (n.children) sortNodes(n.children);
+        });
+    };
+    
+    sortNodes(root);
+    return root;
 }
 
 export async function scanDirectory(rootPath: string) {
-    // Using fast-glob to scan efficiently
     const entries = await fg(['**/*'], {
         cwd: rootPath,
-        ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/.vscode/**'],
+        ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/.vscode/**', '**/*.lock'],
         onlyFiles: true,
         markDirectories: false,
         dot: true
     });
 
-    const folders = new Set<string>();
-    const extensions = new Set<string>();
-
-    entries.forEach((entry: string) => {
-        const dir = path.dirname(entry);
-        const ext = path.extname(entry);
-
-        if (dir !== '.') {
-            // Get the top-level folder name
-            folders.add(dir.split(path.sep)[0]);
-        }
-        if (ext) {
-            extensions.add(ext);
-        }
-    });
-
-    return {
-        folders: Array.from(folders).sort(),
-        extensions: Array.from(extensions).sort()
-    };
+    return buildTree(entries, rootPath);
 }
 
-export async function generateContext(rootPath: string, config: any): Promise<ContextResult> {
+export async function generateContext(rootPath: string, config: GeneratorConfig): Promise<ContextResult> {
     let output = '';
+    const selections = config.selections;
+
+    // --- 1. User Prompt ---
+    if (config.userPrompt && config.userPrompt.trim()) {
+        output += `# User Instructions\n${config.userPrompt}\n\n`;
+    }
+
+    // --- 2. Root README (Optional) ---
+    if (config.includeReadme) {
+        try {
+            // Try common readme names
+            const readmeCandidates = ['README.md', 'readme.md', 'Readme.md'];
+            let readmeContent = '';
+            for (const name of readmeCandidates) {
+                const p = path.join(rootPath, name);
+                if (fs.existsSync(p)) {
+                    readmeContent = fs.readFileSync(p, 'utf-8');
+                    break;
+                }
+            }
+            if (readmeContent) {
+                output += `# Project README\n\`\`\`markdown\n${readmeContent}\n\`\`\`\n\n`;
+            }
+        } catch (e) { /* ignore if read fails */ }
+    }
     
-    // --- 1. Generate Tree ---
+    // --- 3. Project Tree ---
     output += '# Project Tree\n```\n';
 
-const printTree = (dir: string, prefix: string = '') => {
-const items = fs.readdirSync(dir, { withFileTypes: true });
+const printTree = (dir: string, currentRelativePath: string, prefix: string = '') => {
+let items: fs.Dirent[] = [];
+try {
+items = fs.readdirSync(dir, { withFileTypes: true });
+} catch (e) { return; }
 
 const filteredItems = items.filter(item => {
-if (item.name.startsWith('.') || item.name === 'node_modules') return false;
+const relPath = currentRelativePath ? `${currentRelativePath}/${item.name}` : item.name;
+if (item.name.startsWith('.') || item.name === 'node_modules' || item.name === 'dist' || item.name === 'build') return false;
+
+const itemConfig = selections[relPath];
+// If it's not in the selection map (e.g. a new file), default to included? Or excluded?
+// Based on UI defaults, it should be in the map. If missing, assume excluded or included based on logic.
+// Safe bet: if itemConfig exists and tree is false, exclude.
+if (itemConfig && !itemConfig.tree) return false; 
 return true;
 });
 
 filteredItems.forEach((item, index) => {
 const isLast = index === filteredItems.length - 1;
 const pointer = isLast ? '└── ' : '├── ';
+const relPath = currentRelativePath ? `${currentRelativePath}/${item.name}` : item.name;
 
-let shouldInclude = true;
-
-// Check config against UI selections
-if (item.isDirectory()) {
-const folderConfig = config.folders[item.name];
-if (folderConfig && !folderConfig.tree) shouldInclude = false;
-} else {
-const ext = path.extname(item.name);
-const extConfig = config.extensions[ext];
-if (extConfig && !extConfig.tree) shouldInclude = false;
-}
-
-if (shouldInclude) {
 output += `${prefix}${pointer}${item.name}\n`;
+
 if (item.isDirectory()) {
-printTree(path.join(dir, item.name), prefix + (isLast ? '    ' : '│   '));
-}
+printTree(path.join(dir, item.name), relPath, prefix + (isLast ? '    ' : '│   '));
 }
 });
 };
 
 try {
-printTree(rootPath);
+printTree(rootPath, '');
 } catch (e) {
 output += `Error generating tree: ${e}\n`;
 }
 output += '```\n\n';
 
-    // --- 2. Generate Content ---
+    // --- 4. File Contents ---
     output += '# File Contents\n\n';
 
     const entries = await fg(['**/*'], {
         cwd: rootPath,
         ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/.vscode/**'],
         onlyFiles: true,
-        absolute: true
+        absolute: false 
     });
 
-    for (const filePath of entries) {
-        const relativePath = path.relative(rootPath, filePath);
-        const ext = path.extname(filePath);
-        const parts = relativePath.split(path.sep);
-        const topFolder = parts.length > 1 ? parts[0] : null;
+    for (const relativePath of entries) {
+        const normalizedPath = relativePath.split(path.sep).join('/');
+        const fileConfig = selections[normalizedPath];
 
-        // Determine if file should be included based on extension
-        let includeFile = true;
-        const extConfig = config.extensions[ext];
-        if (extConfig && !extConfig.content) {
-            includeFile = false;
-        }
-
-        // Determine if file should be included based on parent folder
-        if (topFolder) {
-            const folderConfig = config.folders[topFolder];
-            if (folderConfig && !folderConfig.content) {
-                includeFile = false;
-            }
-        }
-
-        if (includeFile) {
+        if (fileConfig && fileConfig.content) {
             try {
-                const content = fs.readFileSync(filePath, 'utf-8');
-                // Simple binary check (skip if null characters found)
+                const fullPath = path.join(rootPath, relativePath);
+                const content = fs.readFileSync(fullPath, 'utf-8');
+                const ext = path.extname(relativePath);
+                
                 if (content.indexOf('\0') === -1) {
                     output += `## File: ${relativePath}\n\`\`\`${ext.replace('.', '')}\n${content}\n\`\`\`\n\n`;
                 }
-            } catch (err) {
-                // Skip unreadable files
-            }
+            } catch (err) { }
         }
     }
 
-    // --- 3. Token Count ---
-    // Using your preferred approximation (chars / 4)
     const tokenCount = Math.ceil(output.length / 4);
 
-    // CRITICAL FIX: Return an OBJECT, not just the string
     return {
         output: output,
         tokens: tokenCount

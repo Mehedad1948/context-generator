@@ -3,314 +3,408 @@ import * as vscode from 'vscode';
 import { scanDirectory, generateContext } from './core';
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('>>> 🚀 EXTENSION IS ACTIVATING <<<');
-
     let disposable = vscode.commands.registerCommand('cntxtify.generateContext', async (uri: vscode.Uri) => {
-        
+        // If triggered via command palette without context, fallback to first workspace folder
+        if (!uri && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+            uri = vscode.workspace.workspaceFolders[0].uri;
+        }
+
         if (!uri) {
-            vscode.window.showErrorMessage('Please right-click a folder to use this command.');
+            vscode.window.showErrorMessage('Please open a folder first.');
             return;
         }
 
         try {
-            const scanData = await scanDirectory(uri.fsPath);
+            const treeData = await scanDirectory(uri.fsPath);
 
             const panel = vscode.window.createWebviewPanel(
                 'cntxtifyConfig',
                 'Generate Context',
                 vscode.ViewColumn.Beside, 
-                { 
-                    enableScripts: true,
-                    retainContextWhenHidden: true 
-                }
+                { enableScripts: true, retainContextWhenHidden: true }
             );
 
-            panel.webview.html = getWebviewContent(scanData, uri.fsPath);
+            panel.webview.html = getWebviewContent(treeData, uri.fsPath);
 
             panel.webview.onDidReceiveMessage(async (message) => {
                 if (message.command === 'generate') {
                     try {
-                        vscode.window.showInformationMessage('Generating Context... please wait.');
-                        
+                        vscode.window.showInformationMessage('Generating Context...');
                         const result = await generateContext(uri.fsPath, message.config);
                         
                         panel.webview.postMessage({ 
                             command: 'displayResult', 
                             result: result 
                         });
-                        
-                        vscode.window.showInformationMessage('Context Generated Successfully!');
                     } catch (err: any) {
-                        vscode.window.showErrorMessage('Error generating context: ' + err.message);
+                        vscode.window.showErrorMessage('Error: ' + err.message);
                     }
                 }
             });
 
         } catch (error: any) {
-            console.error(error);
-            vscode.window.showErrorMessage('Failed to scan directory: ' + error.message);
+            vscode.window.showErrorMessage('Failed to scan: ' + error.message);
         }
     });
 
     context.subscriptions.push(disposable);
 }
 
-// UI Template
-function getWebviewContent(scanData: any, folderPath: string) {
+function getWebviewContent(treeData: any, folderPath: string) {
     return `<!DOCTYPE html>
   <html lang="en">
   <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Context Configuration</title>
+      <title>Context Config</title>
       <style>
+          :root {
+              --tree-hover: var(--vscode-list-hoverBackground);
+              --border: var(--vscode-panel-border);
+              --btn-bg: var(--vscode-button-background);
+              --btn-fg: var(--vscode-button-foreground);
+              --btn-hover: var(--vscode-button-hoverBackground);
+          }
           body { 
               font-family: var(--vscode-font-family); 
               color: var(--vscode-foreground); 
               background-color: var(--vscode-editor-background); 
-              padding: 15px; 
+              padding: 20px; 
           }
-          h2 { font-size: 14px; text-transform: uppercase; opacity: 0.8; margin-bottom: 10px; }
-          
-          /* Sections */
-          .section { margin-bottom: 15px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow: hidden; }
+
+          h3 { margin-top: 0; opacity: 0.9; }
+
+          /* Section containers */
+          .section { margin-bottom: 20px; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
           .section-header { 
-              background: var(--vscode-sideBar-background); 
-              padding: 8px 10px; 
-              cursor: pointer; 
-              font-weight: bold; 
-              display: flex; 
-              justify-content: space-between; 
-              font-size: 12px;
-          }
-          .section-content { padding: 5px 10px; display: block; max-height: 200px; overflow-y: auto; }
-          .hidden { display: none; }
-          
-          /* Rows */
-          .row { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--vscode-input-border); }
-          .label { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-          .controls { display: flex; gap: 10px; }
-          .checkbox-group { display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; }
-          
-          /* Buttons */
-          button {
-              width: 100%; 
-              padding: 10px; 
-              border: none; 
-              cursor: pointer; 
-              font-size: 13px; 
-              border-radius: 2px;
-              margin-bottom: 8px;
-              font-weight: 600;
-              transition: background 0.3s;
-          }
-          
-          #generateBtn {
-              background: var(--vscode-button-background); 
-              color: var(--vscode-button-foreground); 
-              margin-top: 15px;
-          }
-          #generateBtn:hover { background: var(--vscode-button-hoverBackground); }
-          
-          /* Copy Button Styling - Default State */
-          #copyBtn {
-              color: white;
-              display: none; 
-          }
-          #copyBtn:hover { filter: brightness(1.1); }
-
-          /* Token Tips */
-          #token-tip {
-            font-size: 11px;
-            margin-bottom: 15px;
-            text-align: center;
-            font-style: italic;
-            opacity: 0.9;
-            display: none;
+            background: var(--vscode-sideBar-background); padding: 8px 12px; 
+            font-weight: bold; border-bottom: 1px solid var(--border);
+            display: flex; justify-content: space-between; align-items: center;
           }
 
-          /* Result Area */
-          textarea { 
-              width: 100%; 
-              height: 250px; 
-              background: var(--vscode-input-background); 
-              color: var(--vscode-input-foreground); 
-              border: 1px solid var(--vscode-input-border); 
-              font-family: 'Courier New', monospace;
-              font-size: 11px;
-              resize: vertical;
+          /* 1. Prompt Area */
+          #prompt-area textarea {
+            width: 100%; height: 80px; padding: 10px; border: none; resize: vertical;
+            background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+            font-family: inherit; box-sizing: border-box;
           }
+          .prompt-options { padding: 8px 12px; font-size: 0.9em; background: rgba(127,127,127,0.05); }
+
+          /* 2. Tree */
+          ul { list-style: none; padding-left: 0; margin: 0; }
+          li { margin: 0; }
+          .node-row {
+              display: flex; align-items: center; padding: 4px 10px;
+              border-bottom: 1px solid var(--vscode-tree-indentGuidesStroke); 
+              transition: background 0.1s;
+          }
+          .node-row:hover { background-color: var(--tree-hover); }
+          ul ul { padding-left: 20px; border-left: 1px solid var(--vscode-tree-indentGuidesStroke); }
+
+          .node-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; user-select: none; flex: 1; }
+          .node-icon { margin-right: 5px; opacity: 0.8; font-size: 14px;}
+          .checkbox-group { display: flex; gap: 10px; margin-left: 10px; }
+          .cb-wrapper { display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; }
+          
+          details > summary { list-style: none; cursor: pointer; }
+          details > summary::-webkit-details-marker { display: none; }
+          .arrow { display: inline-block; width: 16px; text-align: center; transition: transform 0.2s; font-size: 10px; opacity: 0.7; }
+          details[open] > summary .arrow { transform: rotate(90deg); }
+          .spacer { width: 16px; display: inline-block; }
+
+          /* 3. Extension Filter Grid */
+          #ext-grid { 
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); 
+            gap: 8px; padding: 10px; 
+          }
+          .ext-card {
+            background: rgba(127,127,127,0.1); border-radius: 4px; padding: 5px 8px;
+            display: flex; justify-content: space-between; align-items: center; font-size: 0.85em;
+          }
+          .ext-name { font-weight: bold; }
+          .ext-btns { display: flex; gap: 4px; }
+          .mini-btn { 
+            cursor: pointer; padding: 1px 5px; border-radius: 3px; background: rgba(255,255,255,0.1);
+            font-size: 10px; user-select: none;
+          }
+          .mini-btn:hover { background: rgba(255,255,255,0.3); }
+
+          /* 4. Controls & Footer */
+          .main-btn {
+              width: 100%; padding: 12px; border: none; cursor: pointer; 
+              background: var(--btn-bg); color: var(--btn-fg);
+              font-weight: 600; border-radius: 2px; font-size: 1.1em;
+          }
+          .main-btn:hover { background: var(--btn-hover); }
+
+          /* Copy Button & Colors */
+          #copy-container { margin-top: 10px; display: none; gap: 10px; }
+          #copyBtn { 
+            flex: 1; padding: 10px; border: none; cursor: pointer; color: white; font-weight: bold; border-radius: 2px; 
+          }
+          .tok-green { background-color: #2da44e; }
+          .tok-yellow { background-color: #d29922; }
+          .tok-red { background-color: #cf222e; }
+
+          #output { width: 100%; height: 150px; margin-top: 15px; display:none; }
       </style>
   </head>
   <body>
-      <h3 style="margin-top:0">Context Generator</h3>
-      <p style="font-size: 11px; opacity: 0.7; word-break: break-all;">Target: ${folderPath}</p>
-  
-      <div class="section">
-          <div class="section-header" onclick="toggleSection('folders-content')">
-              <span>📂 Subdirectories</span> <span>▼</span>
-          </div>
-          <div id="folders-content" class="section-content">
-              <div id="folder-list"></div>
-          </div>
-      </div>
-  
-      <div class="section">
-          <div class="section-header" onclick="toggleSection('extensions-content')">
-              <span>📄 File Extensions</span> <span>▼</span>
-          </div>
-          <div id="extensions-content" class="section-content">
-              <div id="extension-list"></div>
-          </div>
-      </div>
-  
-      <button id="generateBtn" onclick="generate()">Generate Context</button>
+      <h3>Target: <span style="font-weight:normal; opacity:0.8; font-size: 0.9em">${folderPath}</span></h3>
       
-      <!-- Copy Button & Tip -->
-      <button id="copyBtn" onclick="copyToClipboard()">Copy to Clipboard</button>
-      <div id="token-tip"></div>
-      
-      <div id="result-area" class="hidden">
-          <div style="font-size:11px; margin-bottom:4px; opacity:0.8;">Output Preview:</div>
-          <textarea id="output" readonly></textarea>
+      <!-- 1. Prompt Section -->
+      <div class="section">
+        <div class="section-header">1. User Instructions</div>
+        <div id="prompt-area">
+            <textarea id="promptInput" placeholder="E.g., 'Focus on the authentication logic and explain how the login flow works.'"></textarea>
+            <div class="prompt-options">
+                <label style="cursor:pointer;"><input type="checkbox" id="readmeCheck"> Include root README.md</label>
+            </div>
+        </div>
       </div>
-  
+
+      <!-- 2. Tree Section -->
+      <div class="section">
+          <div class="section-header">
+             <span>2. Project Structure</span>
+             <span style="font-size:11px; opacity:0.7">T = Tree | C = Content</span>
+          </div>
+          <div id="tree-container"></div>
+      </div>
+
+      <!-- 3. Extension Filter Section -->
+      <div class="section">
+          <div class="section-header">
+            <span>3. Filter by Extension</span>
+            <span style="font-size:10px; opacity:0.7">Bulk select/deselect</span>
+          </div>
+          <div id="ext-grid">
+             <!-- Populated by JS -->
+          </div>
+      </div>
+
+      <button id="generateBtn" class="main-btn" onclick="generate()">Generate Context</button>
+      
+      <div id="copy-container">
+          <button id="copyBtn">Copy to Clipboard (<span id="token-display">0</span> tokens)</button>
+      </div>
+
+      <textarea id="output" readonly></textarea>
+
       <script>
           const vscode = acquireVsCodeApi();
-          const scanData = ${JSON.stringify(scanData)};
-  
-          // Initialize UI
-          const folderList = document.getElementById('folder-list');
-          const extList = document.getElementById('extension-list');
-  
-          function createRow(name, type) {
-              const div = document.createElement('div');
-              div.className = 'row';
-              div.innerHTML = \`
-                  <span class="label" title="\${name}">\${name}</span>
-                  <div class="controls">
-                      <label class="checkbox-group">
-                          <input type="checkbox" id="\${type}-\${name}-tree" checked onchange="handleToggle('\${type}', '\${name}', 'tree')">
-                          Tree
-                      </label>
-                      <label class="checkbox-group">
-                          <input type="checkbox" id="\${type}-\${name}-content" checked onchange="handleToggle('\${type}', '\${name}', 'content')">
-                          Content
-                      </label>
-                  </div>
-              \`;
-              return div;
+          const treeData = ${JSON.stringify(treeData)};
+          const fileExtensions = new Set();
+
+          const container = document.getElementById('tree-container');
+
+          // --- 1. RENDER TREE ---
+          function renderTree(nodes, isRoot = false) {
+              const ul = document.createElement('ul');
+              
+              nodes.forEach(node => {
+                  const li = document.createElement('li');
+                  const isFolder = node.type === 'folder';
+                  const pathId = node.path.replace(/['"]/g, "");
+
+                  // Collect extension for filter grid
+                  let ext = 'file'; 
+                  if (!isFolder) {
+                      const parts = node.name.split('.');
+                      ext = parts.length > 1 ? '.' + parts.pop() : 'no-ext';
+                      fileExtensions.add(ext);
+                  }
+
+                  // HTML for Checkboxes
+                  const controls = \`
+                      <div class="checkbox-group">
+                        <label class="cb-wrapper" title="Include in Tree">
+                           <input type="checkbox" class="cb-tree" data-path="\${node.path}" data-ext="\${ext}" checked onchange="toggle('\${node.path}', 'tree', this.checked)"> T
+                        </label>
+                        <label class="cb-wrapper" title="Include Content">
+                           <input type="checkbox" class="cb-content" data-path="\${node.path}" data-ext="\${ext}" checked onchange="toggle('\${node.path}', 'content', this.checked)"> C
+                        </label>
+                      </div>
+                  \`;
+
+                  const icon = isFolder ? '📂' : '📄';
+                  const arrowOrSpacer = isFolder ? '<span class="arrow">▶</span>' : '<span class="spacer"></span>';
+                  
+                  const rowContent = \`
+                      <div class="node-row \${isFolder ? 'folder-row' : 'file-row'}" id="row-\${pathId}">
+                          \${arrowOrSpacer}
+                          <span class="node-icon">\${icon}</span>
+                          <span class="node-name" title="\${node.path}">\${node.name}</span>
+                          \${controls}
+                      </div>
+                  \`;
+
+                  if (isFolder) {
+                      // Subfolders closed by default (remove 'open' unless root)
+                      // Logic: If it's the very top level call, keep open, else closed.
+                      // Actually user requested "subfolders closed by default". 
+                      const isOpen = isRoot ? 'open' : ''; 
+                      
+                      li.innerHTML = \`
+                          <details \${isOpen}>
+                              <summary>\${rowContent}</summary>
+                              <div class="children-container" id="children-\${pathId}"></div>
+                          </details>
+                      \`;
+                      // Async render children
+                      setTimeout(() => {
+                          const childContainer = document.getElementById('children-' + pathId);
+                          if(node.children) childContainer.appendChild(renderTree(node.children, false));
+                      }, 0);
+                  } else {
+                      li.innerHTML = rowContent;
+                  }
+                  ul.appendChild(li);
+              });
+              return ul;
           }
-  
-          scanData.folders.forEach(f => folderList.appendChild(createRow(f, 'folder')));
-          scanData.extensions.forEach(e => extList.appendChild(createRow(e, 'ext')));
-  
-          function handleToggle(type, name, action) {
-              const treeCb = document.getElementById(\`\${type}-\${name}-tree\`);
-              const contentCb = document.getElementById(\`\${type}-\${name}-content\`);
-  
-              if (action === 'tree' && !treeCb.checked) {
-                  contentCb.checked = false;
-                  contentCb.disabled = true;
-              } else if (action === 'tree' && treeCb.checked) {
-                  contentCb.disabled = false;
-                  contentCb.checked = true; 
+
+          // Initial Render
+          container.appendChild(renderTree(treeData, true)); // true = keep root folders open? Or just use "open" logic above.
+
+          // --- 2. RENDER EXTENSION FILTERS ---
+          setTimeout(() => {
+              const grid = document.getElementById('ext-grid');
+              const sortedExts = Array.from(fileExtensions).sort();
+              
+              if(sortedExts.length === 0) {
+                  grid.innerHTML = '<div style="padding:5px; opacity:0.7">No files found.</div>';
+              } else {
+                  sortedExts.forEach(ext => {
+                      const div = document.createElement('div');
+                      div.className = 'ext-card';
+                      div.innerHTML = \`
+                          <span class="ext-name">\${ext}</span>
+                          <div class="ext-btns">
+                              <span class="mini-btn" onclick="bulkToggle('\${ext}', 'tree')" title="Toggle Tree">T</span>
+                              <span class="mini-btn" onclick="bulkToggle('\${ext}', 'content')" title="Toggle Content">C</span>
+                          </div>
+                      \`;
+                      grid.appendChild(div);
+                  });
+              }
+          }, 100);
+
+
+          // --- 3. TOGGLE LOGIC ---
+
+          // Bulk Toggle by Extension
+          const extState = {}; 
+          window.bulkToggle = (ext, type) => {
+              const key = ext + type;
+              const newState = !extState[key];
+              extState[key] = newState;
+
+              // Find all inputs with this extension data attribute
+              const inputs = document.querySelectorAll(\`input[data-ext="\${ext}"].cb-\${type}\`);
+              inputs.forEach(inp => {
+                  inp.checked = newState;
+                  toggle(inp.dataset.path, type, newState); // Trigger logic cascade
+              });
+          };
+
+          // Individual Toggle
+          window.toggle = (path, kind, isChecked) => {
+              // Dependency Logic
+              if (kind === 'tree' && !isChecked) updateCheckbox(path, 'content', false);
+              if (kind === 'content' && isChecked) updateCheckbox(path, 'tree', true);
+
+              // Cascade down (only if folder path starts with...)
+              // Note: Using startsWith is tricky with generic names, but fast-glob paths are usually unique relative paths.
+              // To avoid massive DOM queries, we restrict to children if possible, but querySelectorAll is easiest.
+              // Optimization: Only cascade if it looks like a folder (we don't pass type here easily, assuming DOM scan).
+              
+              const allInputs = document.querySelectorAll(\`input[data-path^="\${path}/"]\`);
+              if(allInputs.length > 0) {
+                  allInputs.forEach(input => {
+                     if (input.classList.contains('cb-' + kind)) {
+                         input.checked = isChecked;
+                         if (kind === 'tree' && !isChecked) {
+                             const sibling = input.parentElement.parentElement.querySelector('.cb-content');
+                             if(sibling) sibling.checked = false;
+                         }
+                         if (kind === 'content' && isChecked) {
+                             const sibling = input.parentElement.parentElement.querySelector('.cb-tree');
+                             if(sibling) sibling.checked = true;
+                         }
+                     }
+                  });
               }
           }
-  
-          function toggleSection(id) {
-              const el = document.getElementById(id);
-              el.classList.toggle('hidden');
+
+          function updateCheckbox(path, kind, value) {
+              const el = document.querySelector(\`input[data-path="\${path}"].cb-\${kind}\`);
+              if (el) el.checked = value;
           }
-  
+
+          // --- 4. GENERATE & COPY ---
           function generate() {
-              const config = { folders: {}, extensions: {} };
-              scanData.folders.forEach(f => {
-                  config.folders[f] = {
-                      tree: document.getElementById(\`folder-\${f}-tree\`).checked,
-                      content: document.getElementById(\`folder-\${f}-content\`).checked
-                  };
-              });
-              scanData.extensions.forEach(e => {
-                  config.extensions[e] = {
-                      tree: document.getElementById(\`ext-\${e}-tree\`).checked,
-                      content: document.getElementById(\`ext-\${e}-content\`).checked
-                  };
-              });
+              const config = { 
+                  selections: {},
+                  userPrompt: document.getElementById('promptInput').value,
+                  includeReadme: document.getElementById('readmeCheck').checked
+              };
               
-              document.getElementById('generateBtn').innerText = 'Generating...';
+              const allInputs = document.querySelectorAll('.cb-tree'); 
+              allInputs.forEach(treeInput => {
+                  const path = treeInput.getAttribute('data-path');
+                  const contentInput = document.querySelector(\`input[data-path="\${path}"].cb-content\`);
+                  config.selections[path] = {
+                      tree: treeInput.checked,
+                      content: contentInput ? contentInput.checked : false
+                  };
+              });
+
               vscode.postMessage({ command: 'generate', config: config });
+              const btn = document.getElementById('generateBtn');
+              btn.innerText = 'Generating...';
+              btn.disabled = true;
           }
-  
+
+          // Copy Logic
+          document.getElementById('copyBtn').addEventListener('click', () => {
+             const text = document.getElementById('output').value;
+             navigator.clipboard.writeText(text);
+             const btn = document.getElementById('copyBtn');
+             const prev = btn.innerHTML;
+             btn.innerText = 'COPIED!';
+             setTimeout(() => btn.innerHTML = prev, 2000);
+          });
+
           window.addEventListener('message', event => {
               const message = event.data;
               if (message.command === 'displayResult') {
-                  document.getElementById('generateBtn').innerText = 'Generate Context';
-                  document.getElementById('result-area').classList.remove('hidden');
+                  const btn = document.getElementById('generateBtn');
+                  btn.innerText = 'Generate Context';
+                  btn.disabled = false;
+
+                  const out = document.getElementById('output');
+                  out.value = message.result.output;
                   
-                  // Setup Copy Button
+                  // Handle Copy Button & Colors
+                  const copyDiv = document.getElementById('copy-container');
                   const copyBtn = document.getElementById('copyBtn');
-                  const tipDiv = document.getElementById('token-tip');
-                  copyBtn.style.display = 'block';
-                  tipDiv.style.display = 'block';
+                  const tokenSpan = document.getElementById('token-display');
                   
-                  let outputText = '';
-                  let tokenCount = 0;
+                  copyDiv.style.display = 'flex';
+                  copyDiv.scrollIntoView({ behavior: 'smooth' });
                   
-                  if (typeof message.result === 'object' && message.result.output) {
-                      outputText = message.result.output;
-                      tokenCount = message.result.tokens || 0;
-                      
-                      // LOGIC: Token Coloring and Models
-                      let color = '';
-                      let tag = '';
-                      let modelText = '';
-
-                      if (tokenCount < 6000) {
-                          // Green - Low
-                          color = '#2da44e'; 
-                          tag = 'LOW';
-                          modelText = '✅ Fits all models (GPT-3.5, Llama 3, Standard Claude)';
-                      } else if (tokenCount < 25000) {
-                          // Orange - Moderate
-                          color = '#d29922'; 
-                          tag = 'MODERATE';
-                          modelText = '⚠️ Good for GPT-4, Claude 3.5 Sonnet, or Gemini Pro';
-                      } else {
-                          // Red - High
-                          color = '#cf222e'; 
-                          tag = 'HIGH';
-                          modelText = '🔥 Requires large context models (Claude 3 Opus, Gemini 1.5, GPT-4 Turbo)';
-                      }
-
-                      copyBtn.style.backgroundColor = color;
-                      copyBtn.innerHTML = \`Copy to Clipboard (\${tokenCount} tokens) &nbsp; <span style="background:rgba(0,0,0,0.2); padding:0 4px; border-radius:3px;">\${tag}</span>\`;
-                      
-                      tipDiv.style.color = color;
-                      tipDiv.innerText = modelText;
-
-                  } else {
-                      outputText = typeof message.result === 'string' ? message.result : JSON.stringify(message.result, null, 2);
-                      copyBtn.innerText = 'Copy to Clipboard';
-                      copyBtn.style.backgroundColor = 'var(--vscode-button-secondaryBackground)';
-                      tipDiv.style.display = 'none';
-                  }
-
-                  document.getElementById('output').value = outputText;
+                  const tokens = message.result.tokens;
+                  tokenSpan.innerText = tokens;
+                  
+                  copyBtn.className = ''; // Reset
+                  if(tokens < 8000) copyBtn.classList.add('tok-green');
+                  else if(tokens < 32000) copyBtn.classList.add('tok-yellow');
+                  else copyBtn.classList.add('tok-red');
               }
           });
-  
-          function copyToClipboard() {
-              const copyText = document.getElementById("output");
-              copyText.select();
-              document.execCommand("copy");
-              
-              const btn = document.getElementById('copyBtn');
-              const prevHTML = btn.innerHTML;
-              btn.innerHTML = '✅ Copied!';
-              setTimeout(() => btn.innerHTML = prevHTML, 1500);
-          }
       </script>
-  </body>
+  </bod
   </html>`;
 }
+
