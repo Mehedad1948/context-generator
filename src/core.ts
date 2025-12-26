@@ -19,16 +19,17 @@ export interface GeneratorConfig {
 
 export async function scanDirectory(rootPath: string): Promise<TreeItem[]> {
     const items: TreeItem[] = [];
-    const ignoreList = ['.git', 'node_modules', 'dist', 'out', 'build', '.DS_Store', '.vscode'];
+    // Added common lock files and system folders to ignore list
+    const ignoreList = ['.git', 'node_modules', 'dist', 'out', 'build', '.DS_Store', '.vscode', 'package-lock.json', 'yarn.lock'];
 
     async function walk(dir: string, list: TreeItem[]) {
         try {
             const files = await fs.promises.readdir(dir, { withFileTypes: true });
 
-            // Sort: Folders first, then files
+            // Sort: Folders first, then files (Case insensitive sort looks better)
             files.sort((a, b) => {
                 if (a.isDirectory() === b.isDirectory()) {
-                    return a.name.localeCompare(b.name);
+                    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
                 }
                 return a.isDirectory() ? -1 : 1;
             });
@@ -74,7 +75,6 @@ export async function generateContext(rootPath: string, config: GeneratorConfig)
     // 2. ADD README (Special Handling)
     if (config.includeReadme) {
         const readmeVariants = ['README.md', 'Readme.md', 'readme.md', 'README.txt'];
-        let readmeFound = false;
         
         for (const variant of readmeVariants) {
             const readmePath = path.join(rootPath, variant);
@@ -84,7 +84,6 @@ export async function generateContext(rootPath: string, config: GeneratorConfig)
                     output += `PROJECT README (${variant}):\n\n`;
                     output += content;
                     output += `\n\n================================================================\n\n`;
-                    readmeFound = true;
                     break; // Stop after finding the first match
                 } catch (e) {
                     console.error("Error reading README:", e);
@@ -99,10 +98,12 @@ export async function generateContext(rootPath: string, config: GeneratorConfig)
     
     if (validPaths.length > 0) {
         output += `PROJECT STRUCTURE:\n`;
+        // Sort paths alphabetically for cleaner tree output
         validPaths.sort().forEach(filePath => {
             // Convert to relative path for cleaner output
             const relativePath = path.relative(rootPath, filePath);
-            output += `- ${relativePath}\n`;
+            // Normalized relative path (replace backslashes for consistency in output)
+            output += `- ${relativePath.split(path.sep).join('/')}\n`;
         });
         output += `\n================================================================\n\n`;
     }
@@ -115,19 +116,22 @@ export async function generateContext(rootPath: string, config: GeneratorConfig)
         // Skip if file no longer exists
         if (!fs.existsSync(filePath)) continue;
 
-        // Skip folders (sometimes folders get checked for content in UI, but we can't print folder content)
-        const stat = fs.statSync(filePath);
-        if (!stat.isFile()) continue;
-
+        // Skip folders (folders can be checked in UI, but have no text content)
         try {
+            const stat = fs.statSync(filePath);
+            if (!stat.isFile()) continue;
+
             const relativePath = path.relative(rootPath, filePath);
+            const normalizedPath = relativePath.split(path.sep).join('/');
+            
             const fileContent = fs.readFileSync(filePath, 'utf-8');
 
-            output += `--- START FILE: ${relativePath} ---\n`;
+            output += `--- START FILE: ${normalizedPath} ---\n`;
             output += fileContent + '\n';
-            output += `--- END FILE: ${relativePath} ---\n\n`;
+            output += `--- END FILE: ${normalizedPath} ---\n\n`;
         } catch (error) {
-            output += `Error reading file: ${filePath}\n\n`;
+            console.error(`Error processing file ${filePath}:`, error);
+            output += `[Error reading file: ${filePath}]\n\n`;
         }
     }
 

@@ -14,13 +14,20 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         try {
+            // Show scanning message
+            vscode.window.setStatusBarMessage('Cntxtify: Scanning directory...', 2000);
+            
             const treeData = await scanDirectory(uri.fsPath);
 
             const panel = vscode.window.createWebviewPanel(
                 'cntxtifyConfig',
                 'Generate Context',
                 vscode.ViewColumn.Beside, 
-                { enableScripts: true, retainContextWhenHidden: true }
+                { 
+                    enableScripts: true, 
+                    retainContextWhenHidden: true,
+                    localResourceRoots: [] 
+                }
             );
 
             panel.webview.html = getWebviewContent(treeData, uri.fsPath);
@@ -28,7 +35,6 @@ export function activate(context: vscode.ExtensionContext) {
             panel.webview.onDidReceiveMessage(async (message) => {
                 if (message.command === 'generate') {
                     try {
-                        // Show a temporary status message in VS Code bottom bar
                         vscode.window.setStatusBarMessage('Cntxtify: Generating...', 2000);
                         
                         const result = await generateContext(uri.fsPath, message.config);
@@ -52,6 +58,9 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 function getWebviewContent(treeData: any, folderPath: string) {
+    // Escaping JSON to prevent script injection issues with file paths
+    const treeDataJson = JSON.stringify(treeData).replace(/</g, '\\u003c');
+
     return `<!DOCTYPE html>
   <html lang="en">
   <head>
@@ -77,7 +86,6 @@ function getWebviewContent(treeData: any, folderPath: string) {
 
           h3 { margin-top: 0; opacity: 0.9; }
 
-          /* Section containers */
           .section { margin-bottom: 20px; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
           .section-header { 
             background: var(--vscode-sideBar-background); padding: 8px 12px; 
@@ -85,15 +93,12 @@ function getWebviewContent(treeData: any, folderPath: string) {
             display: flex; justify-content: space-between; align-items: center;
           }
 
-          /* 1. Prompt Area */
           #prompt-area textarea {
             width: 100%; height: 80px; padding: 10px; border: none; resize: vertical;
             background: var(--vscode-input-background); color: var(--vscode-input-foreground);
             font-family: inherit; box-sizing: border-box;
           }
-          .prompt-options { padding: 8px 12px; font-size: 0.9em; background: rgba(127,127,127,0.05); }
 
-          /* 2. Tree */
           ul { list-style: none; padding-left: 0; margin: 0; }
           li { margin: 0; }
           .node-row {
@@ -115,7 +120,6 @@ function getWebviewContent(treeData: any, folderPath: string) {
           details[open] > summary .arrow { transform: rotate(90deg); }
           .spacer { width: 16px; display: inline-block; }
 
-          /* 3. Extension Filter Grid */
           #ext-grid { 
             display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); 
             gap: 8px; padding: 10px; 
@@ -128,15 +132,14 @@ function getWebviewContent(treeData: any, folderPath: string) {
           .ext-btns { display: flex; gap: 8px; }
           .ext-cb-wrapper { display: flex; align-items: center; gap: 3px; font-size: 11px; cursor: pointer; user-select: none; }
 
-          /* 4. Controls & Footer */
           .main-btn {
               width: 100%; padding: 12px; border: none; cursor: pointer; 
               background: var(--btn-bg); color: var(--btn-fg);
               font-weight: 600; border-radius: 2px; font-size: 1.1em;
           }
           .main-btn:hover { background: var(--btn-hover); }
+          .main-btn:disabled { opacity: 0.6; cursor: wait; }
 
-          /* Copy Button & Colors */
           #copy-container { margin-top: 15px; display: none; gap: 10px; }
           #copyBtn { 
             flex: 1; padding: 10px; border: none; cursor: pointer; color: white; font-weight: bold; border-radius: 2px; 
@@ -145,7 +148,6 @@ function getWebviewContent(treeData: any, folderPath: string) {
           .tok-yellow { background-color: #d29922; }
           .tok-red { background-color: #cf222e; }
 
-          /* Result Area */
           #result-container { margin-top: 15px; display: none; }
           #output { 
               width: 100%; height: 300px; 
@@ -166,7 +168,6 @@ function getWebviewContent(treeData: any, folderPath: string) {
       <div class="section">
         <div class="section-header">
             <span>1. User Instructions</span>
-            <!-- FIX: Added missing Checkbox here -->
             <label class="cb-wrapper" style="font-weight:normal; opacity:0.9;">
                <input type="checkbox" id="readmeCheck"> Include README
             </label>
@@ -191,9 +192,7 @@ function getWebviewContent(treeData: any, folderPath: string) {
             <span>3. Filter by Extension</span>
             <span style="font-size:10px; opacity:0.7">Select/Deselect All</span>
           </div>
-          <div id="ext-grid">
-             <!-- Populated by JS -->
-          </div>
+          <div id="ext-grid"></div>
       </div>
 
       <button id="generateBtn" class="main-btn" onclick="generate()">Generate Context</button>
@@ -209,7 +208,7 @@ function getWebviewContent(treeData: any, folderPath: string) {
 
       <script>
           const vscode = acquireVsCodeApi();
-          const treeData = ${JSON.stringify(treeData)};
+          const treeData = ${treeDataJson};
           const fileExtensions = new Set();
 
           const container = document.getElementById('tree-container');
@@ -221,9 +220,9 @@ function getWebviewContent(treeData: any, folderPath: string) {
               nodes.forEach(node => {
                   const li = document.createElement('li');
                   const isFolder = node.type === 'folder';
-                  const pathId = node.path.replace(/['"]/g, "");
+                  // Unique ID generation (simple regex to remove potential breaking chars for ID)
+                  const pathId = node.path.replace(/[^a-zA-Z0-9]/g, "_");
 
-                  // Collect extension for filter grid
                   let ext = 'file'; 
                   if (!isFolder) {
                       const parts = node.name.split('.');
@@ -231,14 +230,13 @@ function getWebviewContent(treeData: any, folderPath: string) {
                       fileExtensions.add(ext);
                   }
 
-                  // HTML for Checkboxes
                   const controls = \`
                       <div class="checkbox-group">
                         <label class="cb-wrapper" title="Include in Tree">
-                           <input type="checkbox" class="cb-tree" data-path="\${node.path}" data-ext="\${ext}" checked onchange="toggle('\${node.path}', 'tree', this.checked)"> T
+                           <input type="checkbox" class="cb-tree" data-path="\${node.path}" data-ext="\${ext}" checked onchange="toggle(this, 'tree')"> T
                         </label>
                         <label class="cb-wrapper" title="Include Content">
-                           <input type="checkbox" class="cb-content" data-path="\${node.path}" data-ext="\${ext}" checked onchange="toggle('\${node.path}', 'content', this.checked)"> C
+                           <input type="checkbox" class="cb-content" data-path="\${node.path}" data-ext="\${ext}" checked onchange="toggle(this, 'content')"> C
                         </label>
                       </div>
                   \`;
@@ -247,7 +245,7 @@ function getWebviewContent(treeData: any, folderPath: string) {
                   const arrowOrSpacer = isFolder ? '<span class="arrow">▶</span>' : '<span class="spacer"></span>';
                   
                   const rowContent = \`
-                      <div class="node-row \${isFolder ? 'folder-row' : 'file-row'}" id="row-\${pathId}">
+                      <div class="node-row" id="row-\${pathId}">
                           \${arrowOrSpacer}
                           <span class="node-icon">\${icon}</span>
                           <span class="node-name" title="\${node.path}">\${node.name}</span>
@@ -263,9 +261,10 @@ function getWebviewContent(treeData: any, folderPath: string) {
                               <div class="children-container" id="children-\${pathId}"></div>
                           </details>
                       \`;
+                      // Deferred rendering for large trees performance
                       setTimeout(() => {
                           const childContainer = document.getElementById('children-' + pathId);
-                          if(node.children) childContainer.appendChild(renderTree(node.children, false));
+                          if(node.children && childContainer) childContainer.appendChild(renderTree(node.children, false));
                       }, 0);
                   } else {
                       li.innerHTML = rowContent;
@@ -309,41 +308,55 @@ function getWebviewContent(treeData: any, folderPath: string) {
               const inputs = document.querySelectorAll(\`input[data-ext="\${ext}"].cb-\${type}\`);
               inputs.forEach(inp => {
                   inp.checked = isChecked;
-                  toggle(inp.dataset.path, type, isChecked);
+                  // Trigger individual logic without recursion
+                  handleDependencies(inp, type, isChecked);
               });
           };
 
-          window.toggle = (path, kind, isChecked) => {
-              if (kind === 'tree' && !isChecked) updateCheckbox(path, 'content', false);
-              if (kind === 'content' && isChecked) updateCheckbox(path, 'tree', true);
+          window.toggle = (el, type) => {
+              const isChecked = el.checked;
+              handleDependencies(el, type, isChecked);
 
-              const allInputs = document.querySelectorAll(\`input[data-path^="\${path}/"]\`);
-              if(allInputs.length > 0) {
-                  allInputs.forEach(input => {
-                     if (input.classList.contains('cb-' + kind)) {
-                         input.checked = isChecked;
-                         if (kind === 'tree' && !isChecked) {
-                             const sibling = input.parentElement.parentElement.querySelector('.cb-content');
-                             if(sibling) sibling.checked = false;
-                         }
-                         if (kind === 'content' && isChecked) {
-                             const sibling = input.parentElement.parentElement.querySelector('.cb-tree');
-                             if(sibling) sibling.checked = true;
-                         }
-                     }
-                  });
-              }
+              // Handle children recursively (simple prefix match on path)
+              // We escape backslashes for the selector to work on Windows paths
+              const path = el.getAttribute('data-path');
+              const safePath = path.replace(/\\\\/g, '\\\\\\\\'); 
+              // Note: querySelector escaping is tricky. 
+              // A safer approach for children is traversing DOM if performance allows, 
+              // or using the fact that children are rendered inside the details tag.
+              
+              // However, since we need to support deep folders, we'll try to find inputs 
+              // whose data-path starts with the folder path.
+              // To avoid complex selector issues, we can iterate all inputs (slower but safer)
+              // or just specific class.
+              
+              const allInputs = document.querySelectorAll('.cb-' + type);
+              allInputs.forEach(input => {
+                  const p = input.getAttribute('data-path');
+                  if(p !== path && p.startsWith(path + (path.includes('/') ? '/' : '\\\\'))) {
+                      input.checked = isChecked;
+                      handleDependencies(input, type, isChecked);
+                  }
+              });
           }
 
-          function updateCheckbox(path, kind, value) {
-              const el = document.querySelector(\`input[data-path="\${path}"].cb-\${kind}\`);
-              if (el) el.checked = value;
+          function handleDependencies(el, kind, isChecked) {
+              const group = el.parentElement.parentElement;
+              if (kind === 'tree' && !isChecked) {
+                  const contentCb = group.querySelector('.cb-content');
+                  if(contentCb) contentCb.checked = false;
+              }
+              if (kind === 'content' && isChecked) {
+                  const treeCb = group.querySelector('.cb-tree');
+                  if(treeCb) treeCb.checked = true;
+              }
           }
 
           // --- 4. GENERATE & COPY ---
           function generate() {
               const promptVal = document.getElementById('promptInput').value;
-              const readmeVal = document.getElementById('readmeCheck').checked; // This line was crashing before!
+              const readmeCheck = document.getElementById('readmeCheck');
+              const readmeVal = readmeCheck ? readmeCheck.checked : false;
 
               const config = { 
                   selections: {},
@@ -354,7 +367,12 @@ function getWebviewContent(treeData: any, folderPath: string) {
               const allInputs = document.querySelectorAll('.cb-tree'); 
               allInputs.forEach(treeInput => {
                   const path = treeInput.getAttribute('data-path');
-                  const contentInput = document.querySelector(\`input[data-path="\${path}"].cb-content\`);
+                  
+                  // FIXED: Use DOM traversal to find sibling content checkbox
+                  // Previously: used querySelector with path string which broke on Windows paths
+                  const group = treeInput.closest('.checkbox-group');
+                  const contentInput = group ? group.querySelector('.cb-content') : null;
+
                   config.selections[path] = {
                       tree: treeInput.checked,
                       content: contentInput ? contentInput.checked : false
@@ -392,7 +410,10 @@ function getWebviewContent(treeData: any, folderPath: string) {
                   copyDiv.style.display = 'flex';
                   resDiv.style.display = 'block';
                   
-                  copyDiv.scrollIntoView({ behavior: 'smooth' });
+                  // Auto scroll to result
+                  setTimeout(() => {
+                      copyDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }, 100);
                   
                   const tokens = message.result.tokens;
                   document.getElementById('token-display').innerText = tokens;
