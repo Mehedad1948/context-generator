@@ -28,7 +28,9 @@ export function activate(context: vscode.ExtensionContext) {
             panel.webview.onDidReceiveMessage(async (message) => {
                 if (message.command === 'generate') {
                     try {
-                        vscode.window.showInformationMessage('Generating Context...');
+                        // Show a temporary status message in VS Code bottom bar
+                        vscode.window.setStatusBarMessage('Cntxtify: Generating...', 2000);
+                        
                         const result = await generateContext(uri.fsPath, message.config);
                         
                         panel.webview.postMessage({ 
@@ -162,10 +164,15 @@ function getWebviewContent(treeData: any, folderPath: string) {
       
       <!-- 1. Prompt Section -->
       <div class="section">
-        <div class="section-header">1. User Instructions</div>
+        <div class="section-header">
+            <span>1. User Instructions</span>
+            <!-- FIX: Added missing Checkbox here -->
+            <label class="cb-wrapper" style="font-weight:normal; opacity:0.9;">
+               <input type="checkbox" id="readmeCheck"> Include README
+            </label>
+        </div>
         <div id="prompt-area">
             <textarea id="promptInput" placeholder="E.g., 'Focus on the authentication logic and explain how the login flow works.'"></textarea>
-           
         </div>
       </div>
 
@@ -249,9 +256,7 @@ function getWebviewContent(treeData: any, folderPath: string) {
                   \`;
 
                   if (isFolder) {
-                      // Subfolders closed by default (only root stays open if you want, but user said closed by default)
                       const isOpen = isRoot ? 'open' : ''; 
-                      
                       li.innerHTML = \`
                           <details \${isOpen}>
                               <summary>\${rowContent}</summary>
@@ -270,7 +275,6 @@ function getWebviewContent(treeData: any, folderPath: string) {
               return ul;
           }
 
-          // Initial Render
           container.appendChild(renderTree(treeData, true));
 
           // --- 2. RENDER EXTENSION FILTERS ---
@@ -284,7 +288,6 @@ function getWebviewContent(treeData: any, folderPath: string) {
                   sortedExts.forEach(ext => {
                       const div = document.createElement('div');
                       div.className = 'ext-card';
-                      // Note: We start CHECKED because the tree starts CHECKED
                       div.innerHTML = \`
                           <span class="ext-name">\${ext}</span>
                           <div class="ext-btns">
@@ -301,26 +304,19 @@ function getWebviewContent(treeData: any, folderPath: string) {
               }
           }, 100);
 
-
           // --- 3. TOGGLE LOGIC ---
-
-          // Bulk Toggle by Extension
           window.bulkToggle = (ext, type, isChecked) => {
-              // Find all inputs with this extension data attribute
               const inputs = document.querySelectorAll(\`input[data-ext="\${ext}"].cb-\${type}\`);
               inputs.forEach(inp => {
                   inp.checked = isChecked;
-                  toggle(inp.dataset.path, type, isChecked); // Trigger logic cascade
+                  toggle(inp.dataset.path, type, isChecked);
               });
           };
 
-          // Individual Toggle
           window.toggle = (path, kind, isChecked) => {
-              // Dependency Logic
               if (kind === 'tree' && !isChecked) updateCheckbox(path, 'content', false);
               if (kind === 'content' && isChecked) updateCheckbox(path, 'tree', true);
 
-              // Cascade down (folders)
               const allInputs = document.querySelectorAll(\`input[data-path^="\${path}/"]\`);
               if(allInputs.length > 0) {
                   allInputs.forEach(input => {
@@ -346,10 +342,13 @@ function getWebviewContent(treeData: any, folderPath: string) {
 
           // --- 4. GENERATE & COPY ---
           function generate() {
+              const promptVal = document.getElementById('promptInput').value;
+              const readmeVal = document.getElementById('readmeCheck').checked; // This line was crashing before!
+
               const config = { 
                   selections: {},
-                  userPrompt: document.getElementById('promptInput').value,
-                  includeReadme: document.getElementById('readmeCheck').checked
+                  userPrompt: promptVal,
+                  includeReadme: readmeVal
               };
               
               const allInputs = document.querySelectorAll('.cb-tree'); 
@@ -368,7 +367,6 @@ function getWebviewContent(treeData: any, folderPath: string) {
               btn.disabled = true;
           }
 
-          // Copy Logic
           document.getElementById('copyBtn').addEventListener('click', () => {
              const text = document.getElementById('output').value;
              navigator.clipboard.writeText(text);
@@ -388,21 +386,19 @@ function getWebviewContent(treeData: any, folderPath: string) {
                   const out = document.getElementById('output');
                   out.value = message.result.output;
                   
-                  // Show Copy and Result Containers
                   const copyDiv = document.getElementById('copy-container');
                   const resDiv = document.getElementById('result-container');
                   
                   copyDiv.style.display = 'flex';
-                  resDiv.style.display = 'block'; // Make textarea visible
+                  resDiv.style.display = 'block';
                   
-                  // Scroll to result
                   copyDiv.scrollIntoView({ behavior: 'smooth' });
                   
                   const tokens = message.result.tokens;
                   document.getElementById('token-display').innerText = tokens;
                   
                   const copyBtn = document.getElementById('copyBtn');
-                  copyBtn.className = ''; // Reset
+                  copyBtn.className = ''; 
                   if(tokens < 8000) copyBtn.classList.add('tok-green');
                   else if(tokens < 32000) copyBtn.classList.add('tok-yellow');
                   else copyBtn.classList.add('tok-red');
